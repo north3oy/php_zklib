@@ -137,24 +137,64 @@
     }
     
     function zkgetfp($self) {
-        $command = chr(227).chr(17).chr(18);
-        // $command = CMD_DB_RRQ;
-        $command_string = chr(80).chr(16).chr(3).chr(253).chr(132).chr(64).chr(0).chr(0);
+        $users = zkgetuser($self); 	
+        $command = CMD_USERTEMP_RRQ;
+		$command_string = chr(2);
         $chksum = 0;
         $session_id = $self->session_id;
-        
+		
         $u = unpack('H2h1/H2h2/H2h3/H2h4/H2h5/H2h6/H2h7/H2h8', substr( $self->data_recv, 0, 8) );
         $reply_id = hexdec( $u['h8'].$u['h7'] );
-
         $buf = $self->createHeader($command, $chksum, $session_id, $reply_id, $command_string);
-//        file_put_contents('request_finger', $self->data_recv.'========', FILE_APPEND);
+		
         socket_sendto($self->zkclient, $buf, strlen($buf), 0, $self->ip, $self->port);
         
         try {
             @socket_recvfrom($self->zkclient, $self->data_recv, 1024, 0, $self->ip, $self->port);
-//            file_put_contents('read_finger', $self->data_recv.'========', FILE_APPEND);
+
+            $u = unpack('H2h1/H2h2/H2h3/H2h4/H2h5/H2h6', substr( $self->data_recv, 0, 8 ) );
             
-            return '';
+			$templates = Array();
+            if ( getSizeUser($self) ) {
+                $bytes = getSizeUser($self);
+                
+                while ( $bytes > 0 ) {
+                    @socket_recvfrom($self->zkclient, $data_recv, 1032, 0, $self->ip, $self->port);
+                    array_push( $templates, $data_recv);
+                    $bytes -= 1024;
+                }
+                
+                $self->session_id =  hexdec( $u['h6'].$u['h5'] );
+                @socket_recvfrom($self->zkclient, $data_recv, 1024, 0, $self->ip, $self->port);
+            }
+			
+			$arrTemplate = Array();
+            if ( count($templates) > 0 ) {	
+                //The first 4 bytes don't seem to be related to the user
+                for ( $x=0; $x<count($templates); $x++) {
+                    $templates[$x] = substr( $templates[$x], 8 );
+                }
+                $userdata = implode('', $templates);
+				
+				//The first 4 bytes is datasize 
+				$userdata = substr( $userdata,4);
+				while ( strlen($userdata) > 0 ) {
+					$u = unpack('H2h1/H2h2/H2h3/H2h4/H2h5/H2h6', substr($userdata, 0, 6) );
+					$size = hexdec( $u['h2'].$u['h1'] );
+                    $u1 = hexdec($u['h3']);
+                    $u2 = hexdec($u['h4']);					
+					$uid = $u1+($u2*256);
+					$FingerID = hexdec($u['h5']);
+					$Template = base64_encode(substr($userdata,6,$size-6));
+					$TempSize = strlen(substr($userdata,6,$size-6));
+					
+					array_push($arrTemplate,array($users[$uid][0],$FingerID,$TempSize, $Template));
+					
+					$userdata = substr( $userdata, $size );	
+				}
+            }
+			
+            return $arrTemplate;
         } catch(ErrorException $e) {
             return FALSE;
         } catch(exception $e) {
